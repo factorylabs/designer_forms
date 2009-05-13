@@ -13,6 +13,9 @@ better with Designer Forms.
 V1.1 Added :include_errors_for => [:another_field, :another_field] to all form input methods.
 V1.1 Changed error_messages_for to always display at least the header message that the object
 		 has errors (on a form that's too long it was hard to tell if it had errors or not)
+		 
+Author:
+  - Jeremy Jackson
 
 Thanks:
 
@@ -22,7 +25,7 @@ Thanks:
     plugin), confirmation of my ideas and some good alternatives.
 
 Installation:
-
+script/plugin install git://github.com/factorylabs/designer_forms.git
 
 
 Configuration:
