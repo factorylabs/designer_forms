@@ -4,6 +4,22 @@
         into sensible groups.  Leave your thoughts.
 =end
 
+module Kernel
+
+  # Figures out which form_for method is calling our fields_for method, but can be used for other
+  # situations as well.
+  def caller_method(level = 1)
+    caller[level] =~ /`([^']*)'/ and $1
+  end
+
+  # Provides a handy trace style method that you can use anywhere.
+  def log_trace(message)
+    custom_logger = Logger.new('log/trace.log')
+    custom_logger.add(Logger::INFO, "#{Time.now} in #{caller[0]}:\n#{message}\n")
+  end
+
+end
+
 module DesignerForms # :nodoc:
   module HelperExtensions # :nodoc:
 
@@ -19,21 +35,26 @@ module DesignerForms # :nodoc:
       cattr_accessor :form_options
       attr_writer :form_options
 
+      def logger
+        RAILS_DEFAULT_LOGGER
+      end
+
       # Wraps a given string in the configurable input_wrapper_tag and adds the various class names
       # based on if the field is required or has errors.  Also makes the
       # wrap_input_with_designerization a little nicer to use, and standard.
-      def wrap_input(field, input, form_options = {})
+      def wrap_input(field, input, options = {})
         # figures out if the field is actually required or not by reflection or if it was required
         # in the form_options
-        is_required = (@object && @object.class.requires?(field) || form_options[:required] == true)
-
+        is_required = (@object && @object.class.requires?(field) || options[:required] == true)
+        logger.debug("wrap_input = is_required #{is_required}")
         # creates the class attribute based on various information
-        add_class!(form_options, @@form_options.required_class) if is_required
-        add_class!(form_options, @@form_options.error_class) if has_errors?(field, form_options[:include_errors_for])
-        form_options.delete(:required)
-        form_options.delete(:include_errors_for)
-        
-        @template.content_tag(@@form_options.input_wrapper_tag, input, form_options.merge!(:class => "input-container",:id => "#{field}_container"))
+        add_class!(options, @@form_options.required_class) if is_required
+        add_class!(options, @@form_options.error_class) if has_errors?(field, options[:include_errors_for])
+        options.delete(:required)
+        options.delete(:include_errors_for)
+        add_class!(options, "input-container")
+        logger.debug("wrap_input = options #{options.inspect}")
+        @template.content_tag(@@form_options.input_wrapper_tag, input, options.merge!(:id => "#{field}_container"))
       end
       alias_method :wrap_input_with_designerization, :wrap_input
 
@@ -71,7 +92,7 @@ module DesignerForms # :nodoc:
       # well.  This just calls through to the ActionView::Helpers::FormTagHelper.field_set_tag
       # chain.
       def field_set(legend = nil, form_options = {}, &block)
-        field_set_tag_with_designerization(legend, form_options, &block)
+        @template.send(:field_set_tag, legend, form_options, &block)
       end
 
       # Takes over the check_box method, because the order of the args is dumb.
@@ -94,12 +115,15 @@ module DesignerForms # :nodoc:
         # overrides the input helper by creating a new method
         define_method("#{method_name}_with_designerization") do |field, *args|
           form_options = args.last.is_a?(Hash) ? args.pop : {}
+          @object = @template.instance_variable_get("@#{@object_name}") if @object.nil?
           # figures out if the field is actually required or not by reflection or if it was
           # required in the form_options
+          logger.debug "*** @object #{@object}"
+          logger.debug "*** @object.class.requires?(field) #{field} => #{@object.class.requires?(field)}" if @object
           is_required = (@object && @object.class.requires?(field)) || form_options[:required] == true
           
           # # makes sure we actually have an object to validate on
-          # @object = @template.instance_variable_get("@#{@object_name}") if @object.nil?
+
 
           # gets the tip out of the form_options, because we want it as a title attribute, not as a tip
           tip = form_options.delete(:tip)
@@ -235,22 +259,11 @@ module DesignerForms # :nodoc:
     module ActionView::Helpers::FormTagHelper
 
       # Adds or merges a class html attribute to a given hash.
-      def add_class!(form_options, new_class)
-        form_options[:class] = form_options[:class] && form_options[:class].split(' ').include?(new_class) ?
-          form_options[:class] :
-          [form_options[:class], new_class].compact * ' '
+      def add_class!(options, new_class)
+        options[:class] = options[:class] && options[:class].split(' ').include?(new_class) ?
+          options[:class] :
+          [options[:class], new_class].compact * ' '
       end
-
-      def field_set_tag_with_designerization(legend = nil, form_options = {}, &block)
-        content = capture(&block)
-        concat(tag(:fieldset, form_options, true))
-        concat(content_tag(:legend, legend)) unless legend.blank?
-        concat(content)
-        concat("</fieldset>")
-      end
-      self.respond_to?(:field_set_tag) ?
-        alias_method_chain(:field_set_tag, :designerization) : 
-        alias_method(:field_set_tag, :field_set_tag_with_designerization)
       
     end
 

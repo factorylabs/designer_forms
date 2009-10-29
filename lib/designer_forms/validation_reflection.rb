@@ -1,84 +1,119 @@
-# Version 1.4
-# Jeremy: added requires? and field_validates_with methods
-# Jeremy: restructured the naming structure to allow for integration with
-#         factory standard structure.
-
+# encoding: utf-8
+#--
+# Copyright (c) 2006-2008, Michael Schuerig, michael@schuerig.de
+#
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to
+# the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+# LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+# WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#++
 require 'active_record/reflection'
+require 'ostruct'
 
-module DesignerForms # :nodoc:
+# Based on code by Sebastian Kanthak
+# See http://dev.rubyonrails.org/ticket/861
+#
+module DesignerForms
   module ActiveRecordExtensions # :nodoc:
     module ValidationReflection # :nodoc:
 
-      # TODO: move into core configuration for plugin
-      CONFIG_PATH = File.join(RAILS_ROOT, 'config', 'plugins', 'validation_reflection.rb')
-      
-      mattr_accessor :reflected_validations
-      DesignerForms::ActiveRecordExtensions::ValidationReflection.reflected_validations = %w(
-        validates_acceptance_of
-        validates_associated
-        validates_confirmation_of
-        validates_exclusion_of
-        validates_format_of
-        validates_inclusion_of
-        validates_length_of
-        validates_numericality_of
-        validates_presence_of
-        validates_uniqueness_of
-      )
+      extend self
 
-      mattr_accessor :in_ignored_subvalidation
-      DesignerForms::ActiveRecordExtensions::ValidationReflection.in_ignored_subvalidation = false
-      
-      def self.included(base)
+      # Look for config/initalizer here in:
+      CONFIG_PATH = ::Dir.glob((::File.join(RAILS_ROOT, 'config', '**', 'validation_reflection.rb').to_s rescue '')).first || ''
+      CORE_VALIDATONS = [
+          :validates_acceptance_of,
+          :validates_associated,
+          :validates_confirmation_of,
+          :validates_exclusion_of,
+          :validates_format_of,
+          :validates_inclusion_of,
+          :validates_length_of,
+          :validates_numericality_of,
+          :validates_presence_of,
+          :validates_uniqueness_of,
+      ].freeze
+
+      @@reflected_validations = CORE_VALIDATONS.dup
+      @@in_ignored_subvalidation = false
+
+      mattr_accessor :reflected_validations,
+                     :in_ignored_subvalidation
+
+      def included(base) # :nodoc:
         return if base.kind_of?(DesignerForms::ActiveRecordExtensions::ValidationReflection::ClassMethods)
         base.extend(ClassMethods)
       end
 
-      def self.load_config
-        if File.file?(CONFIG_PATH)
-          config = OpenStruct.new
-          config.reflected_validations = reflected_validations
+      # Load config/initializer on load, where ValidationReflection defaults
+      # (such as which validations to reflect upon) cane be overridden/extended.
+      #
+      def load_config
+        if ::File.file?(CONFIG_PATH)
+          config = ::OpenStruct.new
+          config.reflected_validations = @@reflected_validations
           silence_warnings do
-            eval(IO.read(CONFIG_PATH), binding, CONFIG_PATH)
+            eval(::IO.read(CONFIG_PATH), binding, CONFIG_PATH)
           end
         end
       end
 
-      def self.install(base)
-        reflected_validations.freeze
-        reflected_validations.each do |validation_type|
+      # Iterate through all validations and store/cache the info
+      # for later easy access.
+      #
+      def install(base)
+        @@reflected_validations.each do |validation_type|
+          next if base.respond_to?(:"#{validation_type}_with_reflection")
           ignore_subvalidations = false
-          if validation_type.kind_of?(Hash)
+
+          if validation_type.kind_of?(::Hash)
             ignore_subvalidations = validation_type[:ignore_subvalidations]
             validation_type = validation_type[:method]
           end
-          base.class_eval <<-"end_eval"
-            class << self
-              def #{validation_type}_with_reflection(*attr_names)
-                ignoring_subvalidations(#{ignore_subvalidations}) do
-                  #{validation_type}_without_reflection(*attr_names)
-                  remember_validation_metadata(:#{validation_type}, *attr_names)
-                end
-              end
 
-              alias_method_chain :#{validation_type}, :reflection
+          base.class_eval %{
+          class << self
+            def #{validation_type}_with_reflection(*attr_names)
+              ignoring_subvalidations(#{ignore_subvalidations}) do
+                #{validation_type}_without_reflection(*attr_names)
+                remember_validation_metadata(:#{validation_type}, *attr_names)
+              end
             end
-          end_eval
+            alias_method_chain :#{validation_type}, :reflection
+          end
+        }, __FILE__, __LINE__
         end
       end
 
+      alias :reload :install
+
       module ClassMethods
+
+        include DesignerForms::ActiveRecordExtensions::ValidationReflection
 
         # Returns an array of MacroReflection objects for all validations in the class
         def reflect_on_all_validations
-          read_inheritable_attribute(:validations) || []
+          self.read_inheritable_attribute(:validations) || []
         end
 
         # Returns an array of MacroReflection objects for all validations defined for the field +attr_name+.
         def reflect_on_validations_for(attr_name)
-          attr_name = attr_name.to_sym
-          reflect_on_all_validations.select do |reflection|
-            reflection.name == attr_name
+          self.reflect_on_all_validations.select do |reflection|
+            reflection.name == attr_name.to_sym
           end
         end
 
@@ -91,8 +126,8 @@ module DesignerForms # :nodoc:
           if validators.include?(:validates_length_of)
             validator_macros.each do |validator|
               if validator.macro == :validates_length_of &&
-                 (!validator.options.empty? && validator.options[:allow_blank] == false ||
-                 (validator.options[:minimum] && validator.options[:allow_blank] != true))
+                  (!validator.options.empty? && validator.options[:allow_blank] == false ||
+                      (validator.options[:minimum] && validator.options[:allow_blank] != true))
                 return true;
               end
             end
@@ -100,35 +135,30 @@ module DesignerForms # :nodoc:
           validators.include?(:validates_presence_of) || validators.include?(:validates_acceptance_of) || validators.include?(:validates_confirmation_of)
         end
 
-        
-        # Returns a boolean based on if the +attr_name+ field validates with the given +validation_method+.
-        def field_validates_with(attr_name, validation_method)
-          attr_name = attr_name.to_sym
-          validation_method = validation_method.to_sym
-          reflect_on_validations_for(attr_name).collect{ |validator| validator = validator.macro }.include?(validation_method)
-        end
-
         private
-        
+
+        # Store validation info for easy and fast access.
+        #
         def remember_validation_metadata(validation_type, *attr_names)
-          configuration = attr_names.last.is_a?(Hash) ? attr_names.pop : {}
+          configuration = attr_names.last.is_a?(::Hash) ? attr_names.pop : {}
           attr_names.each do |attr_name|
-            write_inheritable_array :validations,
-              [ ActiveRecord::Reflection::MacroReflection.new(validation_type, attr_name.to_sym, configuration, self) ]
+            self.write_inheritable_array :validations,
+                                         [::ActiveRecord::Reflection::MacroReflection.new(validation_type, attr_name.to_sym, configuration, self)]
           end
         end
-        
+
         def ignoring_subvalidations(ignore)
-          save_ignore = DesignerForms::ActiveRecordExtensions::ValidationReflection.in_ignored_subvalidation
-          unless DesignerForms::ActiveRecordExtensions::ValidationReflection.in_ignored_subvalidation
-            DesignerForms::ActiveRecordExtensions::ValidationReflection.in_ignored_subvalidation = ignore
+          save_ignore = self.in_ignored_subvalidation
+          unless self.in_ignored_subvalidation
+            self.in_ignored_subvalidation = ignore
             yield
           end
         ensure
-          DesignerForms::ActiveRecordExtensions::ValidationReflection.in_ignored_subvalidation = save_ignore
+          self.in_ignored_subvalidation = save_ignore
         end
-      end
 
+      end
     end
   end
 end
+
